@@ -1,0 +1,57 @@
+{
+  "name": "vue-note-editor",
+  "version": "0.1.0",
+  "description": "A Vue 3 <NoteEditor> component built on Vditor (IR mode) with a tag bar, debounced autosave, and a status bar. Loads Vditor from CDN at runtime.",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/NoteEditor.mjs",
+  "module": "./dist/NoteEditor.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/NoteEditor.mjs"
+    },
+    "./NoteEditor": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/NoteEditor.mjs"
+    },
+    "./style.css": "./dist/style.css"
+  },
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "vue-tsc --noEmit",
+    "build": "vite build",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "vue",
+    "vue3",
+    "note",
+    "editor",
+    "vditor",
+    "markdown"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-org/vue-note-editor.git"
+  },
+  "peerDependencies": {
+    "vue": "^3.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.10",
+    "@vitejs/plugin-vue": "^5.1.4",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.8",
+    "vite-plugin-dts": "^4.2.3",
+    "vue": "^3.5.10",
+    "vue-tsc": "^2.1.6"
+  }
+}
