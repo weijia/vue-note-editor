@@ -40,7 +40,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/your-org/vue-note-editor.git"
+    "url": "git+https://github.com/weijia/vue-note-editor.git"
   },
   "peerDependencies": {
     "vue": "^3.3.0"
