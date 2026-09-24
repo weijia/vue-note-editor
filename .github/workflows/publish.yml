@@ -19,19 +19,16 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
-        working-directory: vue-note-editor
         run: npm install
 
       - name: Build
-        working-directory: vue-note-editor
         run: npm run build
 
       - name: Publish
-        working-directory: vue-note-editor
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
