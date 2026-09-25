@@ -17,6 +17,7 @@
 import { ref } from 'vue'
 import NoteEditor from './NoteEditor.vue'
 import type { SidebarNote, SaveStatus } from './types'
+import { logDemo } from './debug'
 
 const note = ref<SidebarNote>({
   _id: '1',
@@ -39,18 +40,22 @@ function simulateSave() {
 function onSave(content: string) {
   const n = note.value
   note.value = { ...n, content, updatedAt: Date.now() }
+  logDemo.log('收到 save', { id: n._id, length: content.length })
   simulateSave()
 }
 
 function onTags(tags: string[]) {
   note.value = { ...note.value, tags }
+  logDemo.log('收到 update-tags', tags)
 }
 
 function onManual() {
+  logDemo.log('收到 manual-save')
   simulateSave()
 }
 
-function onState(_s: SaveStatus) {
+function onState(s: SaveStatus) {
   // 父组件可以通过 saveStatus prop 驱动状态栏显示
+  logDemo.log('save-state-change', s)
 }
 </script>

@@ -36,6 +36,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import type { SidebarNote, SaveStatus } from './types'
+import { logEditor } from './debug'
 
 const props = withDefaults(
   defineProps<{
@@ -76,8 +77,15 @@ let currentNoteId: string | null = props.note ? props.note._id : null
 
 function loadVditor(): Promise<any> {
   const w = window as any
-  if (w.Vditor) return Promise.resolve(w.Vditor)
-  if (vditorPromise) return vditorPromise
+  if (w.Vditor) {
+    logEditor.log('loadVditor 复用全局实例')
+    return Promise.resolve(w.Vditor)
+  }
+  if (vditorPromise) {
+    logEditor.log('loadVditor 复用进行中的请求')
+    return vditorPromise
+  }
+  logEditor.log('loadVditor START', VDITOR_JS)
   vditorPromise = new Promise((resolve, reject) => {
     const link = document.createElement('link')
     link.rel = 'stylesheet'
@@ -87,8 +95,15 @@ function loadVditor(): Promise<any> {
     const script = document.createElement('script')
     script.src = VDITOR_JS
     script.async = true
-    script.onload = () => resolve((window as any).Vditor)
-    script.onerror = () => reject(new Error('Failed to load Vditor from CDN'))
+    script.onload = () => {
+      logEditor.log('loadVditor OK')
+      resolve((window as any).Vditor)
+    }
+    script.onerror = () => {
+      const err = new Error('Failed to load Vditor from CDN')
+      logEditor.error('loadVditor FAIL', VDITOR_JS, err)
+      reject(err)
+    }
     document.head.appendChild(script)
   })
   return vditorPromise
@@ -107,8 +122,12 @@ function updateWordCount() {
 }
 
 function doSave() {
-  if (!vditor) return
+  if (!vditor) {
+    logEditor.warn('doSave SKIP 编辑器实例不存在')
+    return
+  }
   const content = typeof vditor.getValue === 'function' ? vditor.getValue() : ''
+  logEditor.log('emit save', { id: currentNoteId, length: content.length })
   emit('save', content)
   emit('save-state-change', 'saving')
   currentStatus.value = 'saving'
@@ -139,6 +158,7 @@ function onManualSave() {
     const content = typeof vditor.getValue === 'function' ? vditor.getValue() : ''
     emit('save', content)
   }
+  logEditor.log('emit manual-save', currentNoteId)
   emit('manual-save')
   emit('save-state-change', 'saving')
   currentStatus.value = 'saving'
@@ -152,6 +172,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 function setStatus(s: SaveStatus) {
+  logEditor.log('saveStatus 变化', s)
   currentStatus.value = s
   if (savedRevertTimer) {
     clearTimeout(savedRevertTimer)
@@ -166,19 +187,27 @@ function setStatus(s: SaveStatus) {
 }
 
 function removeTag(i: number) {
-  if (!props.note) return
+  if (!props.note) {
+    logEditor.warn('removeTag SKIP 无当前笔记')
+    return
+  }
   const tags = [...(props.note.tags || [])]
   tags.splice(i, 1)
+  logEditor.log('emit update-tags（移除）', { removed: i, tags })
   emit('update-tags', tags)
 }
 
 function addTag() {
-  if (!props.note) return
+  if (!props.note) {
+    logEditor.warn('addTag SKIP 无当前笔记')
+    return
+  }
   const v = tagInput.value.trim()
   if (!v) return
   const tags = [...(props.note.tags || [])]
   if (!tags.includes(v)) tags.push(v)
   tagInput.value = ''
+  logEditor.log('emit update-tags（新增）', { added: v, tags })
   emit('update-tags', tags)
 }
 
@@ -187,43 +216,57 @@ function destroyEditor() {
   if (vditor) {
     try {
       vditor.destroy()
+      logEditor.log('destroyEditor OK')
     } catch (_) {
-      /* noop */
+      logEditor.warn('destroyEditor 异常已忽略')
     }
     vditor = null
   }
 }
 
 async function initEditor() {
-  if (!props.note || !editorEl.value) return
-  const Vditor = await loadVditor()
-  vditor = new Vditor(editorEl.value, {
-    mode: 'ir',
-    cdn: VDITOR_CDN,
-    cache: { enable: false },
-    readonly: props.readonly,
-    height: '100%',
-    toolbar: props.readonly
-      ? []
-      : ['bold', 'italic', 'headings', 'list', 'link', 'code', 'table', '|', 'undo', 'redo'],
-    toolbarConfig: { pin: true },
-    counter: { enable: false },
-    after: () => {
-      if (vditor) vditor.setValue(props.note?.content || '', false)
-      editorEl.value?.addEventListener('keydown', onKeydown)
-      currentStatus.value = 'idle'
-      lastSavedTime.value = ''
-      updateWordCount()
-    },
-    input: () => {
-      updateWordCount()
-      scheduleSave()
-    },
-  })
+  if (!props.note || !editorEl.value) {
+    logEditor.warn('initEditor SKIP 无笔记或容器未就绪', {
+      id: props.note?._id ?? null,
+      elReady: Boolean(editorEl.value),
+    })
+    return
+  }
+  try {
+    const Vditor = await loadVditor()
+    logEditor.log('initEditor START', { id: props.note._id, readonly: props.readonly })
+    vditor = new Vditor(editorEl.value, {
+      mode: 'ir',
+      cdn: VDITOR_CDN,
+      cache: { enable: false },
+      readonly: props.readonly,
+      height: '100%',
+      toolbar: props.readonly
+        ? []
+        : ['bold', 'italic', 'headings', 'list', 'link', 'code', 'table', '|', 'undo', 'redo'],
+      toolbarConfig: { pin: true },
+      counter: { enable: false },
+      after: () => {
+        if (vditor) vditor.setValue(props.note?.content || '', false)
+        editorEl.value?.addEventListener('keydown', onKeydown)
+        currentStatus.value = 'idle'
+        lastSavedTime.value = ''
+        updateWordCount()
+        logEditor.log('initEditor READY', props.note?._id)
+      },
+      input: () => {
+        updateWordCount()
+        scheduleSave()
+      },
+    })
+  } catch (e: any) {
+    logEditor.error('initEditor FAIL', e)
+  }
 }
 
 // ---- lifecycle / watchers ----
 onMounted(() => {
+  logEditor.log('mounted', { id: props.note?._id ?? null, readonly: props.readonly })
   if (props.note) nextTick(initEditor)
 })
 
@@ -232,18 +275,21 @@ onUnmounted(() => {
   if (savedRevertTimer) clearTimeout(savedRevertTimer)
   if (editorEl.value) editorEl.value.removeEventListener('keydown', onKeydown)
   destroyEditor()
+  logEditor.log('unmounted')
 })
 
 watch(
   () => props.note,
   (newNote, oldNote) => {
     if (!newNote) {
+      logEditor.log('note 变为空，保存并销毁编辑器')
       flushSave()
       destroyEditor()
       currentNoteId = null
       return
     }
     if (oldNote && newNote._id === oldNote._id) return
+    logEditor.log('切换笔记', { from: oldNote?._id ?? null, to: newNote._id })
     flushSave()
     destroyEditor()
     currentNoteId = newNote._id
