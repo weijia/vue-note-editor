@@ -16,14 +16,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Node 24 => npm 11.x。Node 22 自带 npm 10.9.x 对 NPM_TOKEN 发布会 404，升 24 修复。
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build
         run: npm run build

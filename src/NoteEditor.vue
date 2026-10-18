@@ -61,7 +61,8 @@ const emit = defineEmits<{
 
 const VDITOR_CSS = 'https://unpkg.com/vditor@3/dist/index.css'
 const VDITOR_JS = 'https://unpkg.com/vditor@3/dist/index.min.js'
-const VDITOR_CDN = 'https://unpkg.com/vditor@3/dist'
+// Vditor 的 cdn 是资源基址，内部会自行拼接 /dist/... ，故此处不能带 /dist（否则变成 /dist/dist/... 404）
+const VDITOR_CDN = 'https://unpkg.com/vditor@3'
 
 const editorEl = ref<HTMLElement | null>(null)
 const tagInput = ref('')
