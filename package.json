@@ -1,6 +1,6 @@
 {
   "name": "vue-note-editor",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "A Vue 3 <NoteEditor> component built on Vditor (IR mode) with a tag bar, debounced autosave, and a status bar. Loads Vditor from CDN at runtime.",
   "type": "module",
   "files": [

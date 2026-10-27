@@ -30,21 +30,6 @@
         <button class="ne-save-btn" type="button" title="手动保存" @click="onManualSave">💾</button>
       </span>
     </div>
-
-    <!-- 自建表格浮动菜单：点 IR 表格单元格时弹出（官方 IR 模式无此菜单） -->
-    <div
-      v-if="tableMenu"
-      ref="tableMenuEl"
-      class="ne-table-menu"
-      :style="{ left: tableMenu.x + 'px', top: tableMenu.y + 'px' }"
-    >
-      <button v-if="tableMenu.pos.rowIndex >= 0" type="button" @click="applyTableOp('row-above')">↑ 在上方插入行</button>
-      <button type="button" @click="applyTableOp('row-below')">↓ 在下方插入行</button>
-      <button type="button" @click="applyTableOp('col-left')">← 在左侧插入列</button>
-      <button type="button" @click="applyTableOp('col-right')">→ 在右侧插入列</button>
-      <button v-if="tableMenu.pos.rowIndex >= 0" type="button" @click="applyTableOp('del-row')">删除此行</button>
-      <button type="button" @click="applyTableOp('del-col')">删除此列</button>
-    </div>
   </div>
 </template>
 
@@ -99,9 +84,19 @@ const currentStatus = ref<SaveStatus>(props.saveStatus)
 const lastSavedTime = ref('')
 const wordCount = ref(0)
 
-// 自建表格浮动菜单：点 IR 渲染区的表格单元格时弹出（IR 模式官方无此能力）
-const tableMenu = ref<{ x: number; y: number; pos: TablePosition } | null>(null)
-const tableMenuEl = ref<HTMLElement | null>(null)
+// 表格工具条（复刻 Vditor WYSIWYG 范式：光标进入表格时才在工具栏显示；IR 模式官方无此能力）
+const tablePos = ref<TablePosition | null>(null)
+let tableToolbarEl: HTMLElement | null = null
+
+// 表格操作按钮定义。needRow=true 表示「必须落在数据行上」——表头行没有「上方插行 / 删除此行」
+const TABLE_OPS: { op: TableOp; text: string; title: string; needRow: boolean }[] = [
+  { op: 'row-above', text: '↑行', title: '在上方插入行', needRow: true },
+  { op: 'row-below', text: '↓行', title: '在下方插入行', needRow: false },
+  { op: 'col-left', text: '←列', title: '在左侧插入列', needRow: false },
+  { op: 'col-right', text: '→列', title: '在右侧插入列', needRow: false },
+  { op: 'del-row', text: '删行', title: '删除当前行', needRow: true },
+  { op: 'del-col', text: '删列', title: '删除当前列', needRow: false },
+]
 
 let vditor: any = null
 let vditorPromise: Promise<any> | null = null
@@ -271,50 +266,23 @@ function addTag() {
   emit('update-tags', tags)
 }
 
-// ---- 自建表格浮动菜单（IR 模式官方无行列操作菜单，这里补上）----
-function hideTableMenu() {
-  if (tableMenu.value) {
-    tableMenu.value = null
-    document.removeEventListener('click', onDocClick)
-  }
-}
+// ---- 表格工具条（复刻 Vditor WYSIWYG 范式：光标进入表格才在工具栏显示，不弹浮层遮挡）----
 
-function onDocClick(e: MouseEvent) {
-  if (tableMenuEl.value && !tableMenuEl.value.contains(e.target as Node)) hideTableMenu()
-}
-
-function onEditorClick(e: MouseEvent) {
-  if (props.readonly || !vditor || !editorEl.value) {
-    hideTableMenu()
-    return
-  }
-  const target = e.target as HTMLElement
-  const cell = target.closest('td, th') as HTMLElement | null
-  if (!cell) {
-    hideTableMenu()
-    return
-  }
+/** 从当前光标（选区）解析所在表格位置；光标不在表格单元格内则返回 null */
+function getTablePosFromSelection(): TablePosition | null {
+  if (!editorEl.value) return null
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0) return null
+  let node: Node | null = sel.getRangeAt(0).startContainer
+  if (node && node.nodeType !== 1) node = node.parentNode // 1 = ELEMENT_NODE
+  const cell = (node as HTMLElement | null)?.closest?.('td, th') as HTMLElement | null
+  if (!cell || !editorEl.value.contains(cell)) return null
   const tableEl = cell.closest('table') as HTMLTableElement | null
-  if (!tableEl) {
-    hideTableMenu()
-    return
-  }
-  // 仅 IR 模式渲染区内的表格
-  if (!editorEl.value.querySelector('.vditor-ir')) {
-    hideTableMenu()
-    return
-  }
-  const tables = Array.from(editorEl.value.querySelectorAll('table'))
-  const tableIndex = tables.indexOf(tableEl)
-  if (tableIndex < 0) {
-    hideTableMenu()
-    return
-  }
+  if (!tableEl) return null
+  const tableIndex = Array.from(editorEl.value.querySelectorAll('table')).indexOf(tableEl)
+  if (tableIndex < 0) return null
   const row = cell.closest('tr') as HTMLTableRowElement | null
-  if (!row) {
-    hideTableMenu()
-    return
-  }
+  if (!row) return null
   const isHeader = !!cell.closest('thead')
   const colIndex = Array.from(row.children).indexOf(cell)
   let rowIndex = -1
@@ -322,23 +290,64 @@ function onEditorClick(e: MouseEvent) {
     const tbody = row.closest('tbody')
     if (tbody) rowIndex = Array.from(tbody.children).indexOf(row)
   }
-  tableMenu.value = { x: e.clientX, y: e.clientY, pos: { tableIndex, rowIndex, colIndex } }
-  // 延迟一拍再挂全局监听，避免本次 click 冒泡到 document 把刚弹出的菜单关掉
-  document.removeEventListener('click', onDocClick)
-  setTimeout(() => document.addEventListener('click', onDocClick), 0)
+  return { tableIndex, rowIndex, colIndex }
+}
+
+/** 把表格按钮组注入 Vditor 工具栏（结构与官方工具栏项一致：div.vditor-toolbar__item） */
+function buildTableToolbar() {
+  if (tableToolbarEl) return
+  const toolbar = editorEl.value?.querySelector('.vditor-toolbar')
+  if (!toolbar) return
+  const wrap = document.createElement('div')
+  wrap.className = 'vditor-toolbar__item ne-table-toolbar'
+  wrap.innerHTML = TABLE_OPS.map(
+    (o) => `<button type="button" data-op="${o.op}" title="${o.title}">${o.text}</button>`,
+  ).join('')
+  // 关键：mousedown 阻止默认行为，避免点按钮时编辑区失去选区（否则解析不到当前行/列）
+  wrap.addEventListener('mousedown', (e) => e.preventDefault())
+  wrap.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest('button[data-op]') as HTMLElement | null
+    if (btn?.dataset.op) void applyTableOp(btn.dataset.op as TableOp)
+  })
+  toolbar.appendChild(wrap)
+  tableToolbarEl = wrap
+  syncTableToolbar()
+}
+
+/** 依据光标位置显示/隐藏工具条，并同步按钮可用状态 */
+function syncTableToolbar() {
+  const el = tableToolbarEl
+  if (!el) return
+  if (props.readonly || !vditor) {
+    tablePos.value = null
+    el.style.display = 'none'
+    return
+  }
+  const pos = getTablePosFromSelection()
+  tablePos.value = pos
+  if (!pos) {
+    el.style.display = 'none'
+    return
+  }
+  el.style.display = ''
+  const isHeader = pos.rowIndex < 0 // 表头行：没有「上方插行」和「删除此行」
+  el.querySelectorAll<HTMLButtonElement>('button[data-op]').forEach((btn) => {
+    const needRow = TABLE_OPS.find((o) => o.op === btn.dataset.op)?.needRow
+    if (needRow) btn.disabled = isHeader
+  })
+}
+
+function onSelectionChange() {
+  syncTableToolbar()
 }
 
 async function applyTableOp(op: TableOp) {
-  if (!tableMenu.value || !vditor) return
-  const pos = tableMenu.value.pos
+  const pos = tablePos.value
+  if (!pos || !vditor) return
   const raw = typeof vditor.getValue === 'function' ? vditor.getValue() : ''
   const newMd = editTable(raw, pos, op)
-  if (newMd == null) {
-    hideTableMenu()
-    return
-  }
+  if (newMd == null) return
   vditor.setValue(newMd)
-  hideTableMenu()
   scheduleSave()
   // best-effort：把光标放回目标单元格（IR contenteditable，失败静默）
   await nextTick()
@@ -370,8 +379,13 @@ async function applyTableOp(op: TableOp) {
 function destroyEditor() {
   if (editorEl.value) {
     editorEl.value.removeEventListener('keydown', onKeydown)
-    editorEl.value.removeEventListener('click', onEditorClick)
   }
+  document.removeEventListener('selectionchange', onSelectionChange)
+  if (tableToolbarEl) {
+    tableToolbarEl.remove()
+    tableToolbarEl = null
+  }
+  tablePos.value = null
   if (vditor) {
     try {
       vditor.destroy()
@@ -408,8 +422,10 @@ async function initEditor() {
       after: () => {
         if (vditor) vditor.setValue(props.note?.content || '', false)
         editorEl.value?.addEventListener('keydown', onKeydown)
-        editorEl.value?.removeEventListener('click', onEditorClick)
-        editorEl.value?.addEventListener('click', onEditorClick)
+        // 表格工具条：注入 Vditor 工具栏，并跟随光标显隐
+        buildTableToolbar()
+        document.removeEventListener('selectionchange', onSelectionChange)
+        document.addEventListener('selectionchange', onSelectionChange)
         currentStatus.value = 'idle'
         lastSavedTime.value = ''
         updateWordCount()
@@ -610,34 +626,37 @@ defineExpose({ vditor: () => vditor })
   overflow-x: auto;
 }
 
-.ne-table-menu {
-  position: fixed;
-  z-index: 9999;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
-  padding: 4px;
+/* 表格工具条：由 JS 注入到 Vditor 工具栏内部（原生 DOM，scoped 需用 :deep 才能命中） */
+:deep(.ne-table-toolbar) {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 2px;
-  min-width: 120px;
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid #e5e7eb;
 }
 
-.ne-table-menu button {
-  border: none;
-  background: transparent;
-  text-align: left;
-  padding: 6px 10px;
-  font-size: 13px;
-  border-radius: 6px;
+:deep(.ne-table-toolbar button) {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #374151;
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 4px;
   cursor: pointer;
-  color: #333;
   white-space: nowrap;
 }
 
-.ne-table-menu button:hover {
-  background: #f1f5f9;
+:deep(.ne-table-toolbar button:hover:not(:disabled)) {
+  background: #eef2ff;
+  border-color: #818cf8;
+  color: #4338ca;
+}
+
+:deep(.ne-table-toolbar button:disabled) {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 @media (max-width: 768px) {
