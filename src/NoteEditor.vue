@@ -59,9 +59,21 @@ const emit = defineEmits<{
   (e: 'manual-save'): void
 }>()
 
-const VDITOR_CSS = 'https://unpkg.com/vditor@3/dist/index.css'
-const VDITOR_JS = 'https://unpkg.com/vditor@3/dist/index.min.js'
-const VDITOR_CDN = 'https://unpkg.com/vditor@3/dist'
+// ★ Vditor 版本锁定 + 多 CDN 兜底
+// 之前用 vditor@3（浮动主版本号），每次加载都解析到当时最新的 3.x，行为不稳定；
+// 而 IR 模式表格工具条（上/下插行、左/右插列、删行、删列、对齐）依赖 Vditor 正确加载，
+// 浮动版本 + 单一 unpkg 源在不可达时会静默失效 → 表现为“点表格没菜单”。
+// 这里锁定 3.11.3，并优先 jsDelivr（国内可达），失败回退 unpkg。
+const VDITOR_VERSION = '3.11.3'
+const VDITOR_CSS_LIST = [
+  `https://cdn.jsdelivr.net/npm/vditor@${VDITOR_VERSION}/dist/index.css`,
+  `https://unpkg.com/vditor@${VDITOR_VERSION}/dist/index.css`,
+]
+const VDITOR_JS_LIST = [
+  `https://cdn.jsdelivr.net/npm/vditor@${VDITOR_VERSION}/dist/index.min.js`,
+  `https://unpkg.com/vditor@${VDITOR_VERSION}/dist/index.min.js`,
+]
+const VDITOR_CDN = `https://cdn.jsdelivr.net/npm/vditor@${VDITOR_VERSION}/dist`
 
 const editorEl = ref<HTMLElement | null>(null)
 const tagInput = ref('')
@@ -75,6 +87,50 @@ let debounceTimer: number | null = null
 let savedRevertTimer: number | null = null
 let currentNoteId: string | null = props.note ? props.note._id : null
 
+// 依次尝试加载样式表：前一个 onerror 再挂下一个，保证至少一个生效。
+function loadStyleSheets(urls: string[]): void {
+  let idx = 0
+  const tryNext = () => {
+    if (idx >= urls.length) return
+    const href = urls[idx++]
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = href
+    link.onerror = tryNext
+    document.head.appendChild(link)
+  }
+  tryNext()
+}
+
+// 依次尝试多 CDN 加载 Vditor 脚本；任一成功即 resolve，全部失败才 reject。
+function loadScriptWithFallback(urls: string[]): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let idx = 0
+    const tryNext = () => {
+      if (idx >= urls.length) {
+        const err = new Error('Failed to load Vditor from all CDNs')
+        logEditor.error('loadVditor FAIL all CDNs', urls, err)
+        reject(err)
+        return
+      }
+      const src = urls[idx++]
+      const script = document.createElement('script')
+      script.src = src
+      script.async = true
+      script.onload = () => {
+        logEditor.log('loadVditor OK', src)
+        resolve((window as any).Vditor)
+      }
+      script.onerror = () => {
+        logEditor.warn('loadVditor CDN 失败，尝试下一个', src)
+        tryNext()
+      }
+      document.head.appendChild(script)
+    }
+    tryNext()
+  })
+}
+
 function loadVditor(): Promise<any> {
   const w = window as any
   if (w.Vditor) {
@@ -85,27 +141,9 @@ function loadVditor(): Promise<any> {
     logEditor.log('loadVditor 复用进行中的请求')
     return vditorPromise
   }
-  logEditor.log('loadVditor START', VDITOR_JS)
-  vditorPromise = new Promise((resolve, reject) => {
-    const link = document.createElement('link')
-    link.rel = 'stylesheet'
-    link.href = VDITOR_CSS
-    document.head.appendChild(link)
-
-    const script = document.createElement('script')
-    script.src = VDITOR_JS
-    script.async = true
-    script.onload = () => {
-      logEditor.log('loadVditor OK')
-      resolve((window as any).Vditor)
-    }
-    script.onerror = () => {
-      const err = new Error('Failed to load Vditor from CDN')
-      logEditor.error('loadVditor FAIL', VDITOR_JS, err)
-      reject(err)
-    }
-    document.head.appendChild(script)
-  })
+  logEditor.log('loadVditor START', VDITOR_JS_LIST)
+  loadStyleSheets(VDITOR_CSS_LIST)
+  vditorPromise = loadScriptWithFallback(VDITOR_JS_LIST)
   return vditorPromise
 }
 
