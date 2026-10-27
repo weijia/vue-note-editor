@@ -30,6 +30,21 @@
         <button class="ne-save-btn" type="button" title="手动保存" @click="onManualSave">💾</button>
       </span>
     </div>
+
+    <!-- 自建表格浮动菜单：点 IR 表格单元格时弹出（官方 IR 模式无此菜单） -->
+    <div
+      v-if="tableMenu"
+      ref="tableMenuEl"
+      class="ne-table-menu"
+      :style="{ left: tableMenu.x + 'px', top: tableMenu.y + 'px' }"
+    >
+      <button v-if="tableMenu.pos.rowIndex >= 0" type="button" @click="applyTableOp('row-above')">↑ 在上方插入行</button>
+      <button type="button" @click="applyTableOp('row-below')">↓ 在下方插入行</button>
+      <button type="button" @click="applyTableOp('col-left')">← 在左侧插入列</button>
+      <button type="button" @click="applyTableOp('col-right')">→ 在右侧插入列</button>
+      <button v-if="tableMenu.pos.rowIndex >= 0" type="button" @click="applyTableOp('del-row')">删除此行</button>
+      <button type="button" @click="applyTableOp('del-col')">删除此列</button>
+    </div>
   </div>
 </template>
 
@@ -37,6 +52,7 @@
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import type { SidebarNote, SaveStatus } from './types'
 import { logEditor } from './debug'
+import { editTable, type TablePosition, type TableOp } from './tableOps'
 
 const props = withDefaults(
   defineProps<{
@@ -82,6 +98,10 @@ const tagInput = ref('')
 const currentStatus = ref<SaveStatus>(props.saveStatus)
 const lastSavedTime = ref('')
 const wordCount = ref(0)
+
+// 自建表格浮动菜单：点 IR 渲染区的表格单元格时弹出（IR 模式官方无此能力）
+const tableMenu = ref<{ x: number; y: number; pos: TablePosition } | null>(null)
+const tableMenuEl = ref<HTMLElement | null>(null)
 
 let vditor: any = null
 let vditorPromise: Promise<any> | null = null
@@ -251,8 +271,107 @@ function addTag() {
   emit('update-tags', tags)
 }
 
+// ---- 自建表格浮动菜单（IR 模式官方无行列操作菜单，这里补上）----
+function hideTableMenu() {
+  if (tableMenu.value) {
+    tableMenu.value = null
+    document.removeEventListener('click', onDocClick)
+  }
+}
+
+function onDocClick(e: MouseEvent) {
+  if (tableMenuEl.value && !tableMenuEl.value.contains(e.target as Node)) hideTableMenu()
+}
+
+function onEditorClick(e: MouseEvent) {
+  if (props.readonly || !vditor || !editorEl.value) {
+    hideTableMenu()
+    return
+  }
+  const target = e.target as HTMLElement
+  const cell = target.closest('td, th') as HTMLElement | null
+  if (!cell) {
+    hideTableMenu()
+    return
+  }
+  const tableEl = cell.closest('table') as HTMLTableElement | null
+  if (!tableEl) {
+    hideTableMenu()
+    return
+  }
+  // 仅 IR 模式渲染区内的表格
+  if (!editorEl.value.querySelector('.vditor-ir')) {
+    hideTableMenu()
+    return
+  }
+  const tables = Array.from(editorEl.value.querySelectorAll('table'))
+  const tableIndex = tables.indexOf(tableEl)
+  if (tableIndex < 0) {
+    hideTableMenu()
+    return
+  }
+  const row = cell.closest('tr') as HTMLTableRowElement | null
+  if (!row) {
+    hideTableMenu()
+    return
+  }
+  const isHeader = !!cell.closest('thead')
+  const colIndex = Array.from(row.children).indexOf(cell)
+  let rowIndex = -1
+  if (!isHeader) {
+    const tbody = row.closest('tbody')
+    if (tbody) rowIndex = Array.from(tbody.children).indexOf(row)
+  }
+  tableMenu.value = { x: e.clientX, y: e.clientY, pos: { tableIndex, rowIndex, colIndex } }
+  // 延迟一拍再挂全局监听，避免本次 click 冒泡到 document 把刚弹出的菜单关掉
+  document.removeEventListener('click', onDocClick)
+  setTimeout(() => document.addEventListener('click', onDocClick), 0)
+}
+
+async function applyTableOp(op: TableOp) {
+  if (!tableMenu.value || !vditor) return
+  const pos = tableMenu.value.pos
+  const raw = typeof vditor.getValue === 'function' ? vditor.getValue() : ''
+  const newMd = editTable(raw, pos, op)
+  if (newMd == null) {
+    hideTableMenu()
+    return
+  }
+  vditor.setValue(newMd)
+  hideTableMenu()
+  scheduleSave()
+  // best-effort：把光标放回目标单元格（IR contenteditable，失败静默）
+  await nextTick()
+  try {
+    const tables = editorEl.value?.querySelectorAll('table')
+    const table = tables?.[pos.tableIndex] as HTMLTableElement | undefined
+    if (!table) return
+    const targetDataRow =
+      op === 'row-below' ? (pos.rowIndex < 0 ? 0 : pos.rowIndex + 1) : Math.max(0, pos.rowIndex)
+    const tbody = table.querySelector('tbody')
+    const rows = Array.from(
+      (tbody ?? table).querySelectorAll('tr'),
+    ) as HTMLTableRowElement[]
+    const tr = rows[Math.min(targetDataRow, rows.length - 1)]
+    if (!tr) return
+    const cell = tr.children[Math.min(pos.colIndex, tr.children.length - 1)] as HTMLElement
+    if (!cell) return
+    const range = document.createRange()
+    range.setStart(cell, 0)
+    range.collapse(true)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  } catch (_) {
+    /* 光标定位失败不影响表格更新 */
+  }
+}
+
 function destroyEditor() {
-  if (editorEl.value) editorEl.value.removeEventListener('keydown', onKeydown)
+  if (editorEl.value) {
+    editorEl.value.removeEventListener('keydown', onKeydown)
+    editorEl.value.removeEventListener('click', onEditorClick)
+  }
   if (vditor) {
     try {
       vditor.destroy()
@@ -289,6 +408,8 @@ async function initEditor() {
       after: () => {
         if (vditor) vditor.setValue(props.note?.content || '', false)
         editorEl.value?.addEventListener('keydown', onKeydown)
+        editorEl.value?.removeEventListener('click', onEditorClick)
+        editorEl.value?.addEventListener('click', onEditorClick)
         currentStatus.value = 'idle'
         lastSavedTime.value = ''
         updateWordCount()
@@ -487,6 +608,36 @@ defineExpose({ vditor: () => vditor })
 :deep(.vditor-toolbar) {
   flex-wrap: nowrap;
   overflow-x: auto;
+}
+
+.ne-table-menu {
+  position: fixed;
+  z-index: 9999;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 120px;
+}
+
+.ne-table-menu button {
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #333;
+  white-space: nowrap;
+}
+
+.ne-table-menu button:hover {
+  background: #f1f5f9;
 }
 
 @media (max-width: 768px) {
