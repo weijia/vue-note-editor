@@ -4,31 +4,32 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch: {}
-
-permissions:
-  contents: read
+  workflow_dispatch:
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Node 24 => npm 11.x，OIDC / npm Trusted Publisher 发布所必需。
+      # Node 22 => npm 10.9.x 仅支持 provenance 签名，不支持 OIDC 授权发布。
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build
         run: npm run build
 
-      - name: Publish
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # 通过 npm Trusted Publisher 的 OIDC 免密发布（不依赖 NPM_TOKEN）。
+      - name: Publish to npm
+        run: npm publish --access public --provenance

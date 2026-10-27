@@ -73,7 +73,9 @@ const VDITOR_JS_LIST = [
   `https://cdn.jsdelivr.net/npm/vditor@${VDITOR_VERSION}/dist/index.min.js`,
   `https://unpkg.com/vditor@${VDITOR_VERSION}/dist/index.min.js`,
 ]
-const VDITOR_CDN = `https://cdn.jsdelivr.net/npm/vditor@${VDITOR_VERSION}/dist`
+// Vditor 的 cdn 是资源基址，内部会自行拼接 /dist/... ，故此处不能带 /dist（否则变成 /dist/dist/... 404）。
+// 同时优先 jsDelivr（国内可达），失败回退 unpkg。
+const VDITOR_CDN = `https://cdn.jsdelivr.net/npm/vditor@${VDITOR_VERSION}`
 
 const editorEl = ref<HTMLElement | null>(null)
 const tagInput = ref('')
